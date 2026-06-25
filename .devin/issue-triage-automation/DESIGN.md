@@ -4,7 +4,7 @@ Event-driven system that triages every new GitHub issue and, for a narrow safe
 subset, autonomously fixes it and opens a draft PR — with full observability into
 the triage funnel.
 
-Headline = the **auto review → plan → fix → PR** loop (the full Devin system),
+Headline = the **auto-resolve → plan → fix → PR** loop (the full Devin system),
 gated by a **cheap classifier** so the expensive loop only runs when it's safe and
 likely to succeed. Duplicate detection is one branch of the classifier, not the
 whole project.
