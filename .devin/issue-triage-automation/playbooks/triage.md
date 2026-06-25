@@ -152,17 +152,45 @@ clearly fits.
 - **Recorded as:** action `label`, outcome `needs_human`.
 
 ### `auto-resolve`
-Reserved for issues a future automated resolver will handle. **In this MVP the
-`auto-resolve` branch only applies the `auto-resolve` label — it does not run
-any resolver and opens no PR.** The `heuristic` classifier maps text mentioning
-a CVE / "vulnerability" / "dependency" / "bump" to this **label**, but that
-still triggers no resolver. As the `devin-session` classifier, only choose
-`auto-resolve` to mark an issue as a candidate for that future capability.
+The issue is an **easy, well-scoped fix** you can implement and ship as a draft
+PR: a small bug with a clear cause/location, a typo, a copy/UI tweak, etc. This
+is a judgment only you (the session) can make — choose it when you are confident
+you can reproduce the problem, find the cause, and write a *minimal* fix. When in
+doubt prefer `needs-review`; a wrong `auto-resolve` is the expensive mistake.
+This label is **not** about dependencies/CVEs. The offline `heuristic` classifier
+never returns `auto-resolve` (it cannot make this judgment).
 
-- **Routing:** `triage.py` adds the `auto-resolve` label only, and prints that
-  automated resolution is **reserved for a future resolver and is not yet
-  implemented**.
-- **Recorded as:** action `label`, outcome `left_open`.
+- **Routing (two phases):**
+  1. `triage.py` adds the `auto-resolve` label, records the classification, and
+     prints an `auto_resolve_request` handoff (it does **not** record a terminal
+     run — that is deferred to phase 2).
+  2. You then run the resolver loop **as this session**: reproduce → scan the
+     codebase → plan → implement a minimal fix in the working tree → open a
+     **draft** PR with `resolve.py open-pr` (see §3.1). `resolve.py` opens the
+     PR, comments the link on the issue, and records the run.
+- **Recorded as:** action `auto_resolve`, outcome `pr_opened` (or `error` if the
+  PR could not be opened). Never auto-merge; never close the issue.
+
+#### 3.1 Opening the draft PR (`resolve.py`)
+
+After you have implemented the fix in the working tree, open the draft PR from
+the `scripts/` directory, naming exactly the files you changed:
+
+```bash
+python resolve.py open-pr \
+  --repo NotLiu/superset-issues-manager --issue 123 \
+  --files "superset/path/one.py superset/path/two.py" \
+  --title "fix: <concise summary> (#123)" \
+  --body-file /tmp/pr_body.md \
+  --session "$DEVIN_SESSION_ID" --acu 1.7
+```
+
+`resolve.py` creates a fresh branch, stages **only** the named files, commits,
+pushes, and opens the PR with `gh pr create --draft`. Write `--body-file` as a
+reviewer-facing description of the change (what was wrong, what you changed, how
+you verified). It refuses to run if none of the named files actually changed.
+Pass `--dry-run` to print every git/gh command without touching git, GitHub, or
+the metrics store. On any failure it records the run as `outcome=error`.
 
 ---
 
@@ -198,6 +226,7 @@ way to inspect/debug each step. **Do not edit these files.**
 | `search.py` | FTS5 BM25 candidate retrieval over the corpus | `python search.py --text "..." --k 10 [--json]` |
 | `act.py` | GitHub comment/label + dup-comment renderer | `python act.py comment\|label\|dup-comment --repo O/R --issue N [--dry-run]` |
 | `record.py` | persist classification + run; dashboard metrics | `python record.py classification\|run\|metrics\|timeseries` |
+| `resolve.py` | auto-resolve draft-PR flow (branch/commit/push/draft PR + record) | `python resolve.py open-pr --repo O/R --issue N --files "..." --title "..." --body-file F [--dry-run]` |
 | `db.py` | SQLite schema + connection (corpus + metrics) | `python db.py` (init) |
 | `ingest.py` | build/rebuild the corpus (read-only upstream) | `python ingest.py --repo apache/superset --limit 300` |
 
