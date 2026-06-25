@@ -127,13 +127,13 @@ _SEED_ROWS: list[dict[str, Any]] = [
         "action": "label",
         "outcome": "needs_human",
     },
-    # auto-resolve -> dependency-CVE fix, draft PR opened
+    # auto-resolve -> small well-scoped fix, draft PR opened
     {
         "issue": 41030,
         "label": "auto-resolve",
         "confidence": 0.95,
         "matched": [],
-        "evidence": "flask pinned to CVE-2026-27205 version; safe bump",
+        "evidence": "typo in dashboard tooltip copy; one-line fix",
         "action": "auto_resolve",
         "outcome": "pr_opened",
         "devin_session_id": "devin-seed-aaaa1111",
@@ -145,7 +145,7 @@ _SEED_ROWS: list[dict[str, Any]] = [
         "label": "auto-resolve",
         "confidence": 0.92,
         "matched": [],
-        "evidence": "vulnerable transitive pin surfaced by OSV; minimal recompile",
+        "evidence": "missing null guard in chart export; clear reproduction + fix",
         "action": "auto_resolve",
         "outcome": "pr_opened",
         "devin_session_id": "devin-seed-bbbb2222",
