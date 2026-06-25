@@ -60,6 +60,7 @@ OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL = "https://api.osv.dev/v1/vulns/"
 
 _PIN_LINE = re.compile(r"^([A-Za-z0-9_.-]+)==([^\s]+)")
+_SECURITY_PIN = re.compile(r"^([A-Za-z0-9_.-]+)>=")
 
 
 def _http_json(url: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -145,12 +146,13 @@ def _upsert_pin(package: str, fix_version: str, advisory: str) -> str:
         start = text.index(PIN_BLOCK_START)
         end = text.index(PIN_BLOCK_END) + len(PIN_BLOCK_END)
         block = text[start:end]
-        # Drop any prior pin for this package, then append the fresh one.
-        kept = [
-            ln
-            for ln in block.splitlines()
-            if not _PIN_LINE.match(ln.strip()) or not ln.strip().startswith(package)
-        ]
+
+        # Drop any prior pin for exactly this package, then append the fresh one.
+        def _is_prior_pin(line: str) -> bool:
+            m = _SECURITY_PIN.match(line.strip())
+            return m is not None and m.group(1).lower() == package.lower()
+
+        kept = [ln for ln in block.splitlines() if not _is_prior_pin(ln)]
         new_block = "\n".join(kept[:-1] + [entry, PIN_BLOCK_END])
         return text[:start] + new_block + text[end:]
     new_block = f"\n{PIN_BLOCK_START}\n{entry}\n{PIN_BLOCK_END}\n"
@@ -180,7 +182,9 @@ def _recompile_minimal(
         ln
         for ln in orig.splitlines()
         if "superset-core" not in ln
-        and not any(_PIN_LINE.match(ln) and ln.lower().startswith(t) for t in targets)
+        and not any(
+            (m := _PIN_LINE.match(ln)) and m.group(1).lower() == t for t in targets
+        )
     ]
     with tempfile.TemporaryDirectory() as tmp:
         constraint = Path(tmp) / "constraint.txt"
