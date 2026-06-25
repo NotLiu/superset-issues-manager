@@ -181,25 +181,32 @@ seed or by re-running `ingest.py`.
   the offline heuristic under-detects duplicates. The LIVE automation uses LLM
   judgment (not numeric thresholds) so it is unaffected; recalibrate the heuristic
   if the offline CLI matters.
-- **Next**: (1) update the live automation prompt so the triggered session runs
-  the `auto-resolve` resolver loop (the prompt's STEP 7 currently says never PR —
-  add a STEP for the `resolve.py` draft-PR path on an `auto-resolve` decision);
+- **Next**: (1) tune the `auto-resolve` confidence bar / add a scope cap on the
+  resolver (max files/lines) so it downgrades borderline issues to needs-review;
   (2) optionally add a payload filter so non-`opened`/ping deliveries don't even
-  spawn a guard-only session.
+  spawn a guard-only session; (3) consider whether `bypass_approval` should stay
+  `true` now that the automation can open PRs autonomously (see §9).
 
 ## 9. Live automation — operational & testing context (READ before testing)
 
 **Automation** (manage via the `devin_automation_manage` MCP tool):
 - id `auto-af1bbdf33a714426a7022e34c9c1797f`, name "Superset issue auto-triage
   (live webhook)", **enabled**, `bypass_approval=true` (sessions run the full flow
-  with no manual approval), `max_acu_limit=10`, `invocation_limit=10 / 3600s`.
+  with no manual approval — including the `auto-resolve` draft-PR path, so an
+  "easy fix" issue can produce a draft PR with no human gate), `max_acu_limit=50`
+  (raised from 10 to fit the resolver fix loop), `invocation_limit=10 / 3600s`.
 - Trigger: `webhook:incoming`, conditions match-all (`[[]]`). Action: `start_session`
   with the triage prompt (STEP 0–7 below), `repos=[NotLiu/superset-issues-manager]`.
 - The triage prompt lives ONLY in the automation action (not in the repo). STEP 0
   GUARD: stop unless `action == "opened"` AND author is not a bot. STEP 1 setup +
   assert `backend: postgres`. STEP 2 `search.py`. STEP 3 classify (LLM judgment).
-  STEP 4 `act.py` comment/label (NOT dry-run). STEP 5 `record.py`. STEP 6
-  `ingest.py --add-issue` (grow corpus). STEP 7 stop (never close/PR/push code).
+  STEP 4 `act.py` label/comment (NOT dry-run). **STEP 4b (`auto-resolve` only):**
+  reproduce → scan → implement a minimal fix → `resolve.py open-pr` opens a DRAFT
+  PR + comments the link + records the `pr_opened` run (or aborts to needs-review
+  if it turns out not to be an easy fix). STEP 5 `record.py` classification (+ run
+  for the non-auto-resolve labels; `resolve.py` already recorded the auto-resolve
+  run). STEP 6 `ingest.py --add-issue` (grow corpus). STEP 7 stop — never merge a
+  PR, never close the issue, and the ONLY PR ever created is the auto-resolve draft.
 
 **GitHub webhook** (repo Settings → Webhooks, hook id `646234668`): `issues`
 events, `application/json`, active.
