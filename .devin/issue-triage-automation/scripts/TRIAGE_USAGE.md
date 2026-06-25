@@ -59,10 +59,6 @@ Each uses `--text` + `--dry-run` so it is safe and reproducible offline. Add
 `--json` to any of them for the full result object.
 
 ```bash
-# auto-resolve — text mentions a dependency bump / CVE (label only; no resolver)
-python triage.py --dry-run \
-  --text "Bump flask from 2.3.3 to 3.1.3 (CVE-2026-27205)"
-
 # duplicate — strongly matches an existing corpus issue (clears --dup-floor)
 python triage.py --dry-run \
   --text "Dashboard fails to load charts, request times out with a 500 error"
@@ -77,14 +73,38 @@ python triage.py --dry-run \
 returns an empty file. No error in the logs. Need a maintainer to look."
 ```
 
-> `auto-resolve` and `invalid` are decided purely from the issue text, so they
-> are deterministic. `duplicate` vs `needs-review` depends on the corpus
-> retrieval scores (tune with `--dup-floor` / `--dup-dominance`); rebuild the
-> corpus first.
+> The `heuristic` classifier only returns `duplicate` / `invalid` /
+> `needs-review`. `invalid` is decided purely from the issue text;
+> `duplicate` vs `needs-review` depends on the corpus retrieval scores (tune
+> with `--dup-floor` / `--dup-dominance`), so rebuild the corpus first.
+> `auto-resolve` is an LLM judgment available only in `devin-session` mode.
 
-`auto-resolve` applies **only** the `auto-resolve` label and prints that
-automated resolution is reserved for a future resolver and is not yet
-implemented — it opens no PR.
+## `auto-resolve` (devin-session) — classify, then open a draft PR
+
+`auto-resolve` marks an **easy, well-scoped fix**. When the `devin-session`
+classifier decides `auto-resolve`, `triage.py` labels the issue, records the
+classification, and prints an `auto_resolve_request` handoff — it does **not**
+record a terminal run. The session then implements the fix and opens the draft
+PR with `resolve.py`, which records the run as `action=auto_resolve`,
+`outcome=pr_opened` (or `error`):
+
+```bash
+# 1. classify as auto-resolve (labels the issue, prints the handoff)
+python triage.py --classifier devin-session --issue 123 \
+  --decision-json '{"label":"auto-resolve","confidence":0.95,"matched":[],"evidence":"one-line null guard in chart export"}'
+
+# 2. (session reproduces, scans, plans, and implements the fix in the tree)
+
+# 3. open the draft PR + record the run
+python resolve.py open-pr --repo NotLiu/superset-issues-manager --issue 123 \
+  --files "superset/path/to/fix.py" \
+  --title "fix: guard null dataset in chart export (#123)" \
+  --body-file /tmp/pr_body.md --session "$DEVIN_SESSION_ID" --acu 1.7
+```
+
+`resolve.py` opens a **draft** PR only and never closes the issue. Use
+`--dry-run` to preview the git/gh commands without writing anything. See
+`../playbooks/triage.md` §3.1 for the full resolver loop.
 
 ---
 

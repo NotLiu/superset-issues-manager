@@ -41,6 +41,13 @@ draft PR, and a minimal metrics dashboard.
 - Reorderable / focusable stat list + additional filters (by label, class, time
   bucket, repo).
 - Cost/latency observability per Devin session beyond the MVP counters.
+- **Live update of the analytics webapp on automation complete** (deferred): push
+  a refresh to the dashboard when a triage/auto-resolve session finishes, instead
+  of the current pull model where the dashboard re-reads the shared store on each
+  page request. Options to evaluate later: a websocket/SSE push from the session's
+  final `record.run(...)`, a lightweight notify channel (e.g. Postgres `LISTEN/
+  NOTIFY`) the dashboard subscribes to, or short-poll auto-refresh on the page.
+  Out of scope for now; the dashboard stays read-on-request.
 
 ## Hardening
 - Idempotency store to never reprocess an issue.

@@ -26,15 +26,17 @@ classifier, not the whole project.
 ## 2. Locked decisions (do not relitigate without the user)
 
 - **Scope = Idea 2** (classify → auto-resolve → PR) as the spine; dedup is the
-  `duplicate` branch. **`auto-resolve` is a KEY FEATURE that must be implemented**
-  (classify → gate → reproduce → fix → draft PR) — per the user it is NOT to be
-  dropped or left label-only. CURRENT STATE: it is wired as a classifier label
-  but the resolver itself is not yet built (this is the top remaining feature).
-  NOTE the scope tension to confirm with the user before building: earlier in the
-  project the user said to drop **dependency/vulnerability**-specific work, and
-  dependency-CVE was the originally-planned first `auto-resolve` class. So before
-  implementing, confirm WHICH class of issues `auto-resolve` should actually fix
-  (a non-dependency class, or re-include dependency/CVE).
+  `duplicate` branch. **`auto-resolve` is a KEY FEATURE** (classify → gate →
+  reproduce → fix → draft PR). **BUILT** (2026-06-25): the session-driven
+  resolver + draft-PR flow lives in `scripts/resolve.py`; `triage.py` labels the
+  issue and hands off the fix loop. **Scope CONFIRMED by the user: `auto-resolve`
+  is a general "easy, well-scoped fix" class decided by the LLM (the session
+  reads the issue, judges it easy to fix, then scans the codebase → plans →
+  implements → opens a draft PR with a description). It is NOT about
+  dependencies/CVEs** (the user's earlier "drop dependency work" decision stands;
+  the old dependency-CVE plan for this class is dropped). `resolve_dependency.py`
+  remains in the tree as a standalone dependency-audit tool but is **no longer**
+  the `auto-resolve` path.
 - **Classifier runs inside a Devin session** (uses existing Devin access — no
   external LLM API key). MVP collapses Tier-0 classify + Tier-1 act into one
   session per issue.
@@ -62,8 +64,9 @@ new/test issue (fork) ─▶ Devin triage session
     ├─ classify         the session's LLM judgment → {duplicate, auto-resolve,
     │                    needs-review, invalid} + confidence + matched ids
     ├─ route via act.py  duplicate → comment top-3 + label; invalid → request
-    │                    info; needs-review → label; auto-resolve → resolve branch
-    ├─ resolve_dependency.py (auto-resolve, dependency-CVE only) → draft PR
+    │                    info; needs-review → label; auto-resolve → label + handoff
+    ├─ resolve.py       auto-resolve: session reproduces/scans/plans/implements a
+    │                    minimal fix → open-pr (branch/commit/push → draft PR)
     └─ record.py        log classification + run/outcome to shared Postgres
                               │
                               ▼
@@ -82,7 +85,8 @@ Guardrails: confidence threshold; default to `needs-review` when unsure; scope c
 | `search.py` | Candidate retrieval over the corpus (Postgres `ts_rank` or SQLite FTS5 BM25). | `--text "..." --k 5 [--json]` |
 | `record.py` | Persist classifications/runs; compute dashboard `metrics()` / `timeseries()`. | `classification|run|metrics|timeseries` |
 | `act.py` | Side-effecting GitHub actions (comment/label) + dup-comment renderer. `--dry-run` to preview. | `comment|label|dup-comment` |
-| `resolve_dependency.py` | Auto-resolve branch: OSV `scan` → `fix` (pin in base.in + minimal recompile) → `verify`. | `scan|fix|verify` |
+| `resolve.py` | Auto-resolve draft-PR flow: stage the session's fix → branch/commit/push → `gh pr create --draft` → comment/label → record `pr_opened`. `--dry-run` to preview. | `open-pr` |
+| `resolve_dependency.py` | Standalone dependency-audit tool (OSV `scan`→`fix`→`verify`). NOT the auto-resolve path; kept for ad-hoc use. | `scan|fix|verify` |
 | `data/corpus__*.jsonl` | Reproducible corpus seed (the `.db` is gitignored, rebuildable). | — |
 
 ## 5. How to run (MVP)
@@ -162,16 +166,26 @@ seed or by re-running `ingest.py`.
 - **Closed**: PR #10 (auto-created integration PR; duplicated #7+#8 and revived
   descoped dependency `resolve_dependency.py` changes).
 - **Classifier labels live**: `duplicate`, `invalid`, `needs-review` fully routed.
-  `auto-resolve` label is applied but the **resolver is not built yet** — this is
-  the **top remaining feature** (see §2 for the scope question to confirm first).
+  **`auto-resolve` resolver BUILT** (`scripts/resolve.py`): on `auto-resolve`,
+  `triage.py` labels + records the classification and prints an
+  `auto_resolve_request` handoff (no terminal run recorded); the session then
+  reproduces/scans/plans/implements a minimal fix and runs `resolve.py open-pr`,
+  which opens a **draft** PR, comments the link, and records the run as
+  `action=auto_resolve, outcome=pr_opened` (or `error`). The offline `heuristic`
+  classifier no longer emits `auto-resolve` (it's an LLM-only judgment).
+- **Deferred (per the user)**: a *live* update of the analytics webapp on
+  automation complete — the dashboard stays read-on-request for now (see
+  `FUTURE_EXTENSIONS.md` → Dashboard & observability).
 - **Known caveat**: the offline `triage.py --classifier heuristic` dup-floor was
   tuned for SQLite BM25 score magnitudes; Postgres `ts_rank` scores are smaller, so
   the offline heuristic under-detects duplicates. The LIVE automation uses LLM
   judgment (not numeric thresholds) so it is unaffected; recalibrate the heuristic
   if the offline CLI matters.
-- **Next**: (1) confirm + build the `auto-resolve` resolver (key feature);
-  (2) merge #7 and #8; (3) optionally add a payload filter so non-`opened`/ping
-  deliveries don't even spawn a guard-only session.
+- **Next**: (1) update the live automation prompt so the triggered session runs
+  the `auto-resolve` resolver loop (the prompt's STEP 7 currently says never PR —
+  add a STEP for the `resolve.py` draft-PR path on an `auto-resolve` decision);
+  (2) optionally add a payload filter so non-`opened`/ping deliveries don't even
+  spawn a guard-only session.
 
 ## 9. Live automation — operational & testing context (READ before testing)
 

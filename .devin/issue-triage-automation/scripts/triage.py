@@ -22,10 +22,17 @@ the decision through the side-effecting GitHub wrappers (`act`, honoring
 `--dry-run`), and persists the decision + action to the metrics store
 (`record`). The classifier is pluggable:
 
-- ``heuristic`` (default): offline, deterministic keyword rules.
+- ``heuristic`` (default): offline, deterministic keyword rules. It only ever
+  returns ``duplicate`` / ``invalid`` / ``needs-review`` — ``auto-resolve`` is an
+  LLM judgment ("is this an easy, well-scoped fix?") the deterministic harness
+  cannot make, so it is reserved for the ``devin-session`` classifier.
 - ``devin-session``: the Devin session itself is the classifier. With no
   decision supplied, this prints a ``classification_request`` for the session to
   judge; the session then re-invokes with ``--decision-json`` to route + record.
+  An ``auto-resolve`` decision labels the issue and prints an
+  ``auto_resolve_request`` handoff: the session then reproduces, plans, and
+  implements the fix and opens the draft PR via ``resolve.py open-pr`` (which
+  records the ``pr_opened`` run). See ``../playbooks/triage.md``.
 
 Usage:
     python triage.py --text "ChunkLoadError loading lazy bundle" --dry-run
@@ -50,14 +57,6 @@ import record
 from search import search
 
 LABELS = ("duplicate", "auto-resolve", "needs-review", "invalid")
-
-# auto-resolve precedence signals (case-insensitive).
-_AUTO_RESOLVE_PATTERNS = (
-    r"cve-\d",
-    r"vulnerabilit",
-    r"dependenc",
-    r"\bbump\b",
-)
 
 # Signals that an issue is an actionable bug report (absence ⇒ invalid).
 _ACTIONABLE_PATTERNS = (
@@ -86,9 +85,15 @@ _INVALID_BODY = (
     "_Posted by the Superset issue-triage automation._"
 )
 
-_AUTO_RESOLVE_NOTICE = (
-    "auto-resolve: applied the `auto-resolve` label only. Automated resolution "
-    "is reserved for a future resolver and is not yet implemented."
+_AUTO_RESOLVE_INSTRUCTION = (
+    "Classified `auto-resolve`: applied the label. Now run the resolver loop "
+    "as this session — reproduce the issue, scan the codebase, plan and "
+    "implement a minimal fix, then open a DRAFT PR by running (from scripts/):\n"
+    "  python resolve.py open-pr --repo {repo} --issue {issue} \\\n"
+    '    --files "<changed paths>" --title "<concise PR title>" \\\n'
+    "    --body-file <pr_description.md> [--session <devin-session-id>] [--acu N]\n"
+    "resolve.py opens the draft PR, comments the link on the issue, and records "
+    "the run as outcome=pr_opened (or error). Never auto-merge or close the issue."
 )
 
 
@@ -126,19 +131,14 @@ def classify_heuristic(
     dup_floor: float,
     dup_dominance: float,
 ) -> dict[str, Any]:
-    """Deterministic, offline classifier (see module docstring / contract)."""
+    """Deterministic, offline classifier (see module docstring / contract).
+
+    Returns only ``duplicate`` / ``invalid`` / ``needs-review``; ``auto-resolve``
+    is an LLM judgment reserved for the ``devin-session`` classifier.
+    """
     low = text.lower()
 
-    # 1. auto-resolve: dependency / CVE / vulnerability / bump signals.
-    if any(re.search(p, low) for p in _AUTO_RESOLVE_PATTERNS):
-        return {
-            "label": "auto-resolve",
-            "confidence": 0.9,
-            "matched": [],
-            "evidence": "matched dependency/CVE/vulnerability/bump signal",
-        }
-
-    # 2. duplicate: a dominant top candidate above the relevance floor.
+    # 1. duplicate: a dominant top candidate above the relevance floor.
     if candidates:
         top = candidates[0]
         top_rel = float(top["relevance"])
@@ -160,7 +160,7 @@ def classify_heuristic(
                     "evidence": (f"closest match #{top['number']}: {top['title']}"),
                 }
 
-    # 3. invalid: short text with no actionable bug-report signals.
+    # 2. invalid: short text with no actionable bug-report signals.
     has_signal = any(re.search(p, low) for p in _ACTIONABLE_PATTERNS)
     if not has_signal and len(text) < _SHORT_TEXT_CHARS:
         return {
@@ -170,7 +170,7 @@ def classify_heuristic(
             "evidence": "no repro/version/logs",
         }
 
-    # 4. fallback: route to a human.
+    # 3. fallback: route to a human.
     matched = [int(c["number"]) for c in candidates[:3]]
     return {
         "label": "needs-review",
@@ -226,9 +226,12 @@ def route(
         return "label", "needs_human"
 
     if label == "auto-resolve":
+        # Mark the issue now; the fix + draft PR are a separate, session-driven
+        # step (resolve.py), so run-recording is deferred to it. The sentinel
+        # "resolving" outcome tells triage() to emit the handoff instead of
+        # recording a terminal run here.
         act.label(repo, issue, ["auto-resolve"], dry_run)
-        print(_AUTO_RESOLVE_NOTICE)
-        return "label", "left_open"
+        return "auto_resolve", "resolving"
 
     raise SystemExit(f"unroutable label: {label!r}")
 
@@ -308,9 +311,8 @@ def triage(
         chosen["matched"],
         chosen["evidence"],
     )
-    record.run(repo, issue, chosen["label"], action, outcome)
 
-    return {
+    result: dict[str, Any] = {
         "repo": repo,
         "issue": issue,
         "classifier": classifier,
@@ -322,6 +324,26 @@ def triage(
         "outcome": outcome,
         "candidates_considered": len(candidates),
     }
+
+    if outcome == "resolving":
+        # auto-resolve: defer the terminal run to resolve.py (pr_opened/error)
+        # and hand the resolver loop to the session.
+        instruction = _AUTO_RESOLVE_INSTRUCTION.format(repo=repo, issue=issue)
+        request = {
+            "auto_resolve_request": {
+                "repo": repo,
+                "issue": issue,
+                "text": text,
+                "candidates": candidates,
+                "instruction": instruction,
+            }
+        }
+        print(json.dumps(request, indent=2))
+        result["auto_resolve_request"] = request["auto_resolve_request"]
+        return result
+
+    record.run(repo, issue, chosen["label"], action, outcome)
+    return result
 
 
 def main() -> None:
