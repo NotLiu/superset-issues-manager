@@ -80,6 +80,25 @@ def fetch_issues(repo: str, limit: int) -> list[dict[str, Any]]:
     return issues
 
 
+def fetch_issue(repo: str, number: int) -> dict[str, Any]:
+    """Fetch a single issue by number via the gh API."""
+    out = subprocess.run(
+        ["gh", "api", f"/repos/{repo}/issues/{number}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    result: dict[str, Any] = json.loads(out.stdout)
+    return result
+
+
+def add_issue(repo: str, number: int) -> dict[str, Any]:
+    """Append a single (new) issue to the shared corpus for future dedup."""
+    row = normalize(repo, fetch_issue(repo, number))
+    store([row])
+    return row
+
+
 def normalize(repo: str, it: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_repo": repo,
@@ -187,11 +206,22 @@ def main() -> None:
         metavar="PATH",
         help="rebuild the corpus from a JSONL seed instead of calling GitHub",
     )
+    ap.add_argument(
+        "--add-issue",
+        type=int,
+        metavar="N",
+        help="append a single issue (by number) from --repo to the corpus",
+    )
     args = ap.parse_args()
 
     if args.from_seed:
         n = load_seed(Path(args.from_seed))
         print(f"Loaded {n} issues into the corpus from {args.from_seed}")
+        return
+
+    if args.add_issue:
+        row = add_issue(args.repo, args.add_issue)
+        print(f"Appended issue #{row['number']} to the corpus: {row['title']}")
         return
 
     print(f"Fetching up to {args.limit} issues from {args.repo} ...")
