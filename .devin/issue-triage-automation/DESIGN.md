@@ -193,12 +193,14 @@ Two options:
 - Classifier runs **inside a Devin session** (uses existing Devin access; no
   external LLM key). For the MVP, Tier-0 classify and Tier-1 act are collapsed
   into a single session per issue.
-- MVP datastore is **SQLite + FTS5** (not Postgres); §7's Postgres schema is the
-  post-MVP north star.
+- Datastore is a **shared, persistent Postgres** (`TRIAGE_DATABASE_URL`) so the
+  corpus and metrics survive across automation-triggered sessions; keyword
+  retrieval uses `tsvector`+GIN. SQLite+FTS5 remains a zero-config fallback for
+  offline CLI/tests. (pgvector stays the post-MVP north star.)
 - Dependency audit uses the **public OSV API** directly (no key, no flaky pip
   resolve) — see `scripts/resolve_dependency.py`.
-- Trigger for the MVP is a **CLI** simulating on-issue-created.
+- Trigger is a **live GitHub `issues` webhook → Devin automation** (headline);
+  the CLI remains as an offline test harness.
 
-**Still open (post-MVP):** webhook relay vs Devin native trigger; dashboard
-(Superset dogfood vs standalone SPA); where Postgres runs once we migrate off
-SQLite. See `FUTURE_EXTENSIONS.md`.
+**Still open (post-MVP):** dashboard hosting (Superset dogfood vs standalone
+SPA); pgvector for semantic recall. See `FUTURE_EXTENSIONS.md`.

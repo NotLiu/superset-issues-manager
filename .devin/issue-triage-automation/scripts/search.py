@@ -34,7 +34,7 @@ import argparse
 import json
 import re
 
-from db import connect
+from db import connect, is_postgres
 
 _TOKEN = re.compile(r"[A-Za-z0-9]+")
 
@@ -50,7 +50,41 @@ def _fts_query(text: str) -> str:
     return " OR ".join(f'"{t}"' for t in seen[:40])
 
 
-def search(text: str, k: int = 5) -> list[dict[str, object]]:
+def _search_postgres(text: str, k: int) -> list[dict[str, object]]:
+    if not _TOKEN.search(text):
+        return []
+    conn = connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT i.source_repo, i.number, i.title,
+                   ts_rank(i.search_tsv, q) AS score,
+                   i.state, i.labels, i.html_url
+            FROM issues i, websearch_to_tsquery('english', ?) q
+            WHERE i.search_tsv @@ q
+            ORDER BY score DESC
+            LIMIT ?
+            """,
+            (text, k),
+        ).fetchall()
+    finally:
+        conn.close()
+    # ts_rank returns higher=better.
+    return [
+        {
+            "source_repo": r["source_repo"],
+            "number": r["number"],
+            "title": r["title"],
+            "relevance": round(float(r["score"]), 4),
+            "state": r["state"],
+            "labels": r["labels"],
+            "html_url": r["html_url"],
+        }
+        for r in rows
+    ]
+
+
+def _search_sqlite(text: str, k: int) -> list[dict[str, object]]:
     query = _fts_query(text)
     if not query:
         return []
@@ -85,6 +119,11 @@ def search(text: str, k: int = 5) -> list[dict[str, object]]:
         }
         for r in rows
     ]
+
+
+def search(text: str, k: int = 5) -> list[dict[str, object]]:
+    """Top-K corpus issues by keyword relevance (backend-appropriate)."""
+    return _search_postgres(text, k) if is_postgres() else _search_sqlite(text, k)
 
 
 def main() -> None:
