@@ -1,0 +1,5 @@
+# Runtime SQLite store (rebuildable from the JSONL seed via ingest/load).
+data/*.db
+data/*.db-journal
+__pycache__/
+*.pyc
