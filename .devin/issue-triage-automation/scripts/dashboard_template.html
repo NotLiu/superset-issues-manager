@@ -58,7 +58,12 @@
         grid-template-columns: 340px 1fr;
         gap: 20px;
         padding: 20px 24px;
-        align-items: start;
+        align-items: stretch;
+      }
+      .chart-col {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
       }
       @media (max-width: 820px) {
         main {
@@ -116,10 +121,14 @@
         border: 1px solid var(--border);
         border-radius: 10px;
         padding: 16px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
       }
       .chart-head {
         display: flex;
-        justify-content: space-between;
+        justify-content: flex-end;
         align-items: center;
         margin-bottom: 12px;
         gap: 12px;
@@ -149,13 +158,15 @@
       }
       .chart-wrap {
         position: relative;
-        height: 360px;
+        flex: 1 1 auto;
+        min-height: 320px;
       }
       .placeholder {
         display: flex;
         align-items: center;
         justify-content: center;
-        height: 360px;
+        height: 100%;
+        min-height: 320px;
         text-align: center;
         color: var(--muted);
         padding: 0 24px;
@@ -208,19 +219,21 @@
         <div id="stats" class="stats"></div>
       </section>
 
-      <section class="chart-panel">
-        <div class="chart-head">
-          <h2>Classifications over time</h2>
-          <div class="toggle" id="toggle" role="group" aria-label="Time bucket">
-            <button data-bucket="day" class="active">Day</button>
-            <button data-bucket="week">Week</button>
+      <section class="chart-col">
+        <h2 class="col-title">Classifications over time</h2>
+        <div class="chart-panel">
+          <div class="chart-head">
+            <div class="toggle" id="toggle" role="group" aria-label="Time bucket">
+              <button data-bucket="day" class="active">Day</button>
+              <button data-bucket="week">Week</button>
+            </div>
           </div>
-        </div>
-        <div class="chart-wrap">
-          <canvas id="chart"></canvas>
-          <div id="chartPlaceholder" class="placeholder" style="display: none">
-            No data yet — run <code>python seed_metrics.py</code> or start with
-            <code>--demo-seed</code>.
+          <div class="chart-wrap">
+            <canvas id="chart"></canvas>
+            <div id="chartPlaceholder" class="placeholder" style="display: none">
+              No data yet — run <code>python seed_metrics.py</code> or start with
+              <code>--demo-seed</code>.
+            </div>
           </div>
         </div>
       </section>
