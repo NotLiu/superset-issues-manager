@@ -50,8 +50,19 @@ def _fts_query(text: str) -> str:
     return " OR ".join(f'"{t}"' for t in seen[:40])
 
 
+def _pg_tsquery(text: str) -> str:
+    """Build an OR-of-tokens tsquery string (matches the SQLite FTS OR query)."""
+    tokens = [t.lower() for t in _TOKEN.findall(text) if len(t) > 2]
+    seen: list[str] = []
+    for t in tokens:
+        if t not in seen:
+            seen.append(t)
+    return " | ".join(seen[:40])
+
+
 def _search_postgres(text: str, k: int) -> list[dict[str, object]]:
-    if not _TOKEN.search(text):
+    query = _pg_tsquery(text)
+    if not query:
         return []
     conn = connect()
     try:
@@ -60,12 +71,12 @@ def _search_postgres(text: str, k: int) -> list[dict[str, object]]:
             SELECT i.source_repo, i.number, i.title,
                    ts_rank(i.search_tsv, q) AS score,
                    i.state, i.labels, i.html_url
-            FROM issues i, websearch_to_tsquery('english', ?) q
+            FROM issues i, to_tsquery('english', ?) q
             WHERE i.search_tsv @@ q
             ORDER BY score DESC
             LIMIT ?
             """,
-            (text, k),
+            (query, k),
         ).fetchall()
     finally:
         conn.close()
