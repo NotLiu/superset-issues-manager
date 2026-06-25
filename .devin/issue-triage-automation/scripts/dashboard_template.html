@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Issue Triage &amp; Auto-Resolve — Metrics</title>
+    <!--
+      Single self-contained dashboard for the Issue Triage & Auto-Resolve MVP.
+      Served verbatim by dashboard.py's `GET /` route. No build step: the only
+      external dependency is the Chart.js CDN script below. On load it fetches
+      /api/metrics and /api/timeseries and renders the page from the live data.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #181b22;
+        --panel-2: #1f232c;
+        --border: #2a2f3a;
+        --text: #e6e9ef;
+        --muted: #9aa3b2;
+        --accent: #4f9dff;
+        --good: #38c172;
+        --warn: #f6c343;
+        --bad: #ef5b5b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          15px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+      }
+      header {
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--border);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+      header p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        gap: 20px;
+        padding: 20px 24px;
+        align-items: start;
+      }
+      @media (max-width: 820px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+      .col-title {
+        margin: 0 0 12px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .stats {
+        display: grid;
+        gap: 10px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .card .value {
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      .card .label {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .estimate {
+        border-style: dashed;
+        background: var(--panel-2);
+      }
+      .estimate-tag {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 6px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #0f1115;
+        background: var(--warn);
+        border-radius: 4px;
+        vertical-align: middle;
+      }
+      .chart-panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+      }
+      .chart-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .chart-head h2 {
+        margin: 0;
+        font-size: 15px;
+      }
+      .toggle {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .toggle button {
+        background: var(--panel-2);
+        color: var(--muted);
+        border: 0;
+        padding: 6px 14px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .toggle button.active {
+        background: var(--accent);
+        color: #fff;
+      }
+      .chart-wrap {
+        position: relative;
+        height: 360px;
+      }
+      .placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 360px;
+        text-align: center;
+        color: var(--muted);
+        padding: 0 24px;
+      }
+      .placeholder code {
+        background: var(--panel-2);
+        padding: 2px 6px;
+        border-radius: 4px;
+        color: var(--text);
+      }
+      .banner {
+        margin: 0 24px;
+        padding: 12px 14px;
+        border-radius: 8px;
+        font-size: 14px;
+        display: none;
+      }
+      .banner.error {
+        display: block;
+        background: rgba(239, 91, 91, 0.12);
+        border: 1px solid var(--bad);
+        color: #ffd5d5;
+      }
+      .banner.info {
+        display: block;
+        background: rgba(79, 157, 255, 0.1);
+        border: 1px solid var(--accent);
+        color: #d6e6ff;
+      }
+      footer {
+        padding: 12px 24px 28px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Issue Triage &amp; Auto-Resolve — Metrics</h1>
+      <p>
+        Funnel observability for the Apache Superset issue-triage automation.
+      </p>
+    </header>
+
+    <div id="banner" class="banner"></div>
+
+    <main>
+      <section>
+        <h2 class="col-title">Key stats</h2>
+        <div id="stats" class="stats"></div>
+      </section>
+
+      <section class="chart-panel">
+        <div class="chart-head">
+          <h2>Classifications over time</h2>
+          <div class="toggle" id="toggle" role="group" aria-label="Time bucket">
+            <button data-bucket="day" class="active">Day</button>
+            <button data-bucket="week">Week</button>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="chart"></canvas>
+          <div id="chartPlaceholder" class="placeholder" style="display: none">
+            No data yet — run <code>python seed_metrics.py</code> or start with
+            <code>--demo-seed</code>.
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span class="estimate-tag">estimate</span> Time-saved and ACU figures are
+      estimates (time saved assumes ~5 min/issue).
+    </footer>
+
+    <script>
+      "use strict";
+
+      const PALETTE = [
+        "#4f9dff",
+        "#38c172",
+        "#f6c343",
+        "#ef5b5b",
+        "#a78bfa",
+        "#22d3ee",
+        "#fb923c",
+        "#ec4899",
+      ];
+
+      const bannerEl = document.getElementById("banner");
+      const statsEl = document.getElementById("stats");
+      const placeholderEl = document.getElementById("chartPlaceholder");
+      const canvasEl = document.getElementById("chart");
+
+      let chart = null;
+
+      function showBanner(kind, msg) {
+        bannerEl.className = "banner " + kind;
+        bannerEl.textContent = msg;
+      }
+      function clearBanner() {
+        bannerEl.className = "banner";
+        bannerEl.textContent = "";
+      }
+
+      async function getJSON(url) {
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(url + " → HTTP " + res.status);
+        }
+        return res.json();
+      }
+
+      function fmtMinutes(min) {
+        const n = Number(min) || 0;
+        if (n >= 60) {
+          return (n / 60).toFixed(1) + " h";
+        }
+        return n + " min";
+      }
+
+      // Build the left-column stat cards from /api/metrics.
+      function renderStats(m) {
+        const cards = [
+          { label: "Total issues tracked", value: m.total_issues_tracked ?? 0 },
+          { label: "Deflected", value: m.issues_deflected ?? 0 },
+          { label: "PRs opened", value: m.prs_opened ?? 0 },
+          { label: "Left open", value: m.left_open ?? 0 },
+          {
+            label: "Resolved after human",
+            value: m.resolved_after_human ?? 0,
+          },
+          {
+            label: "Estimated time saved",
+            value: fmtMinutes(m.estimated_minutes_saved),
+            estimate: true,
+          },
+          {
+            label: "Estimated ACU cost",
+            value: m.estimated_acu_cost ?? 0,
+            estimate: true,
+          },
+          {
+            label: "ACU / issue",
+            value: m.acu_per_issue ?? 0,
+            estimate: true,
+          },
+        ];
+
+        statsEl.innerHTML = "";
+        for (const c of cards) {
+          const div = document.createElement("div");
+          div.className = "card" + (c.estimate ? " estimate" : "");
+          const value = document.createElement("div");
+          value.className = "value";
+          value.textContent = c.value;
+          const label = document.createElement("div");
+          label.className = "label";
+          label.textContent = c.label;
+          if (c.estimate) {
+            const tag = document.createElement("span");
+            tag.className = "estimate-tag";
+            tag.textContent = "estimate";
+            label.appendChild(tag);
+          }
+          div.appendChild(value);
+          div.appendChild(label);
+          statsEl.appendChild(div);
+        }
+      }
+
+      function metricsAllZero(m) {
+        const keys = [
+          "total_issues_tracked",
+          "issues_deflected",
+          "prs_opened",
+          "left_open",
+          "resolved_after_human",
+        ];
+        return keys.every((k) => !Number(m[k]));
+      }
+
+      // Pivot the flat [{bucket,label,n}] list into Chart.js stacked datasets:
+      // x-axis = sorted unique buckets; one dataset per distinct label.
+      function pivot(rows) {
+        const buckets = [...new Set(rows.map((r) => r.bucket))].sort();
+        const labels = [...new Set(rows.map((r) => r.label))].sort();
+        const index = new Map();
+        for (const r of rows) {
+          index.set(r.bucket + "\u0000" + r.label, Number(r.n) || 0);
+        }
+        const datasets = labels.map((label, i) => ({
+          label,
+          data: buckets.map((b) => index.get(b + "\u0000" + label) || 0),
+          backgroundColor: PALETTE[i % PALETTE.length],
+          borderWidth: 0,
+          stack: "classifications",
+        }));
+        return { buckets, datasets };
+      }
+
+      function renderChart(rows) {
+        const hasData = Array.isArray(rows) && rows.length > 0;
+        placeholderEl.style.display = hasData ? "none" : "flex";
+        canvasEl.style.display = hasData ? "block" : "none";
+        if (chart) {
+          chart.destroy();
+          chart = null;
+        }
+        if (!hasData) {
+          return;
+        }
+
+        const { buckets, datasets } = pivot(rows);
+        chart = new Chart(canvasEl.getContext("2d"), {
+          type: "bar",
+          data: { labels: buckets, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            scales: {
+              x: {
+                stacked: true,
+                grid: { color: "#2a2f3a" },
+                ticks: { color: "#9aa3b2" },
+              },
+              y: {
+                stacked: true,
+                beginAtZero: true,
+                grid: { color: "#2a2f3a" },
+                ticks: { color: "#9aa3b2", precision: 0 },
+              },
+            },
+            plugins: {
+              legend: { labels: { color: "#e6e9ef" } },
+              tooltip: { mode: "index", intersect: false },
+            },
+          },
+        });
+      }
+
+      let currentBucket = "day";
+
+      async function loadTimeseries(bucket) {
+        try {
+          const rows = await getJSON(
+            "/api/timeseries?bucket=" + encodeURIComponent(bucket),
+          );
+          renderChart(rows);
+        } catch (err) {
+          renderChart([]);
+          showBanner("error", "Failed to load timeseries data: " + err.message);
+        }
+      }
+
+      function wireToggle() {
+        const toggle = document.getElementById("toggle");
+        toggle.addEventListener("click", (e) => {
+          const btn = e.target.closest("button[data-bucket]");
+          if (!btn) {
+            return;
+          }
+          const bucket = btn.dataset.bucket;
+          if (bucket === currentBucket) {
+            return;
+          }
+          currentBucket = bucket;
+          for (const b of toggle.querySelectorAll("button")) {
+            b.classList.toggle("active", b === btn);
+          }
+          loadTimeseries(bucket);
+        });
+      }
+
+      async function init() {
+        wireToggle();
+        clearBanner();
+
+        let metrics = null;
+        try {
+          metrics = await getJSON("/api/metrics");
+          renderStats(metrics);
+        } catch (err) {
+          showBanner("error", "Failed to load metrics: " + err.message);
+        }
+
+        await loadTimeseries(currentBucket);
+
+        // Empty-state hint when there is genuinely nothing recorded yet.
+        if (
+          metrics &&
+          metricsAllZero(metrics) &&
+          bannerEl.className.indexOf("error") === -1
+        ) {
+          showBanner(
+            "info",
+            "No data yet — run `python seed_metrics.py` or start with `--demo-seed`.",
+          );
+        }
+      }
+
+      init();
+    </script>
+  </body>
+</html>
