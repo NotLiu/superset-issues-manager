@@ -26,7 +26,15 @@ classifier, not the whole project.
 ## 2. Locked decisions (do not relitigate without the user)
 
 - **Scope = Idea 2** (classify → auto-resolve → PR) as the spine; dedup is the
-  `duplicate` branch; dependency-CVE fixing is the first `auto-resolve` class.
+  `duplicate` branch. **`auto-resolve` is a KEY FEATURE that must be implemented**
+  (classify → gate → reproduce → fix → draft PR) — per the user it is NOT to be
+  dropped or left label-only. CURRENT STATE: it is wired as a classifier label
+  but the resolver itself is not yet built (this is the top remaining feature).
+  NOTE the scope tension to confirm with the user before building: earlier in the
+  project the user said to drop **dependency/vulnerability**-specific work, and
+  dependency-CVE was the originally-planned first `auto-resolve` class. So before
+  implementing, confirm WHICH class of issues `auto-resolve` should actually fix
+  (a non-dependency class, or re-include dependency/CVE).
 - **Classifier runs inside a Devin session** (uses existing Devin access — no
   external LLM API key). MVP collapses Tier-0 classify + Tier-1 act into one
   session per issue.
@@ -140,11 +148,82 @@ seed or by re-running `ingest.py`.
 8. **Parallelized** the remaining phases (classification spine + trigger;
    dashboard; auto-resolve branch) into independent child sessions.
 
-## 8. Status & next steps
+## 8. Status & next steps (current)
 
-- **Done**: ingest, search, metrics recorder, GitHub action wrappers, OSV audit.
-- **In progress (child sessions)**: (1) classification spine + CLI trigger,
-  (2) metrics dashboard, (3) auto-resolve dependency branch → draft PR.
-- **Known issue**: `resolve_dependency.py fix` uses a prefix match that also
-  unpins `flask-*` packages — must be an exact package-name match (child 3 fixes).
-- **Then**: integrate child PRs + run the end-to-end demo on the fork.
+- **WORKING end-to-end (live)**: GitHub `issues/opened` webhook → Devin automation
+  fires a session automatically → classify → comment/label on the issue → record
+  metrics to shared Postgres → dashboard funnel increments. Proven on issue #12
+  (classified `duplicate`, posted top-3 comment incl. upstream apache/superset#38976,
+  applied `duplicate` label). See §9 for the exact operational details.
+- **Merged to master**: PR #2 (foundation + docs), PR #9 (shared Postgres datastore
+  + OR-tsquery search fix).
+- **Open, ready to merge to master** (retargeted, mergeable, disjoint files):
+  PR #7 (metrics dashboard), PR #8 (classification spine `triage.py` + playbook).
+- **Closed**: PR #10 (auto-created integration PR; duplicated #7+#8 and revived
+  descoped dependency `resolve_dependency.py` changes).
+- **Classifier labels live**: `duplicate`, `invalid`, `needs-review` fully routed.
+  `auto-resolve` label is applied but the **resolver is not built yet** — this is
+  the **top remaining feature** (see §2 for the scope question to confirm first).
+- **Known caveat**: the offline `triage.py --classifier heuristic` dup-floor was
+  tuned for SQLite BM25 score magnitudes; Postgres `ts_rank` scores are smaller, so
+  the offline heuristic under-detects duplicates. The LIVE automation uses LLM
+  judgment (not numeric thresholds) so it is unaffected; recalibrate the heuristic
+  if the offline CLI matters.
+- **Next**: (1) confirm + build the `auto-resolve` resolver (key feature);
+  (2) merge #7 and #8; (3) optionally add a payload filter so non-`opened`/ping
+  deliveries don't even spawn a guard-only session.
+
+## 9. Live automation — operational & testing context (READ before testing)
+
+**Automation** (manage via the `devin_automation_manage` MCP tool):
+- id `auto-af1bbdf33a714426a7022e34c9c1797f`, name "Superset issue auto-triage
+  (live webhook)", **enabled**, `bypass_approval=true` (sessions run the full flow
+  with no manual approval), `max_acu_limit=10`, `invocation_limit=10 / 3600s`.
+- Trigger: `webhook:incoming`, conditions match-all (`[[]]`). Action: `start_session`
+  with the triage prompt (STEP 0–7 below), `repos=[NotLiu/superset-issues-manager]`.
+- The triage prompt lives ONLY in the automation action (not in the repo). STEP 0
+  GUARD: stop unless `action == "opened"` AND author is not a bot. STEP 1 setup +
+  assert `backend: postgres`. STEP 2 `search.py`. STEP 3 classify (LLM judgment).
+  STEP 4 `act.py` comment/label (NOT dry-run). STEP 5 `record.py`. STEP 6
+  `ingest.py --add-issue` (grow corpus). STEP 7 stop (never close/PR/push code).
+
+**GitHub webhook** (repo Settings → Webhooks, hook id `646234668`): `issues`
+events, `application/json`, active.
+
+**⚠️ Webhook auth gotcha (cost us the most time):** Devin's incoming webhook
+authenticates via a **`?secret=<value>` QUERY PARAMETER appended to the Payload
+URL** — it does NOT use GitHub's HMAC `Secret` field. Symptoms when wrong:
+`401 {"detail":"Missing webhook secret"}` = no `?secret=` in the URL;
+`403 {"detail":"Invalid webhook secret"}` = wrong value. The secret is
+set/rotated in the automation editor ("Regenerate webhook secret") and is NOT
+exposed via the API. Correct Payload URL form:
+`https://app.devin.ai/api/webhooks/automations/org-1bd4e4736c50422eaf783c33d876e949/auto-af1bbdf33a714426a7022e34c9c1797f?secret=<SECRET>`
+
+**Shared datastore:** hosted Neon **Postgres** via env var `TRIAGE_DATABASE_URL`
+(org secret; auto-injected into automation sessions). 300-issue corpus + metrics
+persist across sessions. `psycopg[binary]>=3.1` is required — install with
+`python3 -m pip install -r ../requirements.txt`. Verify with `python3 db.py`
+(must print `backend: postgres`; if it prints sqlite the env var is missing —
+do NOT proceed with the ephemeral store). Do NOT re-ingest the corpus per run.
+
+**How to test end-to-end (the golden path):**
+1. Open a **human-authored** issue on the fork (the GitHub UI as yourself).
+   ⚠️ Issues opened via the `gh` CLI are authored by `devin-ai-integration[bot]`
+   and are SKIPPED by the STEP 0 bot-author guard — they will NOT classify.
+2. Confirm the delivery: `gh api repos/NotLiu/superset-issues-manager/hooks/646234668/deliveries`
+   → newest `issues/opened` should be `200`.
+3. Find the session: `devin_session_search` (origin api / most recent) or watch
+   the automation. With `bypass_approval=true` it runs automatically.
+4. Verify on GitHub: `gh issue view <n> --json labels,comments` → expect the label
+   and (for `duplicate`) a top-3 similar-issues comment.
+5. Verify metrics: from `scripts/`, `python3 -c "import record,json;print(json.dumps(record.metrics()))"`.
+
+**Dashboard:** `cd scripts && python3 dashboard.py --port 8765` → http://127.0.0.1:8765/
+(reads the shared DB via `record.py`). Needs `dashboard.py` + `dashboard_template.html`
+present — they live in PR #7; until #7 is merged restore them with
+`git show origin/pull/7/head:.devin/issue-triage-automation/scripts/dashboard.py`
+(and `dashboard_template.html`). The server reads the template from disk per request.
+
+**Demo evidence from the build run:** issue #12 → duplicate (comment + label);
+funnel reached 11 tracked / 5 deflected. Ping events and bot-authored issue #11
+each fired a session that correctly STOPPED at the STEP 0 guard.
