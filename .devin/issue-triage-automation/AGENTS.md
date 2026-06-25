@@ -32,15 +32,19 @@ classifier, not the whole project.
   session per issue.
 - **No external API key needed.** Classification = Devin session; dependency
   audit = public **OSV API**; GitHub = authenticated `gh` CLI.
-- **Datastore = SQLite + FTS5** for the MVP (single file, zero infra). Postgres
-  /pgvector is the post-MVP north star (see DESIGN §7).
+- **Datastore = shared, persistent Postgres** when `TRIAGE_DATABASE_URL` is set
+  (the live-automation path — corpus + metrics persist across sessions). Falls
+  back to local **SQLite + FTS5** when the env var is unset (offline CLI/tests).
+  Keyword retrieval uses Postgres `tsvector`+GIN or SQLite FTS5 accordingly.
+  pgvector remains the post-MVP north star (see DESIGN §7).
 - **Bounded corpus**: ~300 recent upstream issues ingested read-only — NOT the
   full history, and NOT recreated as real fork issues.
 - **Dependency audit via OSV API directly** (not pip-audit's pip dry-run, which is
   flaky under a non-interactive subprocess).
 - **Draft PRs only** — never auto-merge, never auto-close.
 - **Directory** = `.devin/issue-triage-automation/`.
-- **MVP trigger = CLI** simulating on-issue-created (real webhook→Devin deferred).
+- **Trigger = live GitHub `issues` webhook → Devin automation** (headline). The
+  CLI (`triage`) remains as an offline test harness.
 
 ## 3. Architecture (MVP)
 
@@ -52,7 +56,7 @@ new/test issue (fork) ─▶ Devin triage session
     ├─ route via act.py  duplicate → comment top-3 + label; invalid → request
     │                    info; needs-review → label; auto-resolve → resolve branch
     ├─ resolve_dependency.py (auto-resolve, dependency-CVE only) → draft PR
-    └─ record.py        log classification + run/outcome to SQLite
+    └─ record.py        log classification + run/outcome to shared Postgres
                               │
                               ▼
                         dashboard reads metrics/timeseries
@@ -65,9 +69,9 @@ Guardrails: confidence threshold; default to `needs-review` when unsure; scope c
 
 | file | role | stable CLI |
 |---|---|---|
-| `db.py` | SQLite schema + connection; corpus (`issues` + `issues_fts`) and metrics (`classifications`, `runs`). Override path with `TRIAGE_DB`. | `python db.py` (init) |
+| `db.py` | Dual-backend store: Postgres (`TRIAGE_DATABASE_URL`) or SQLite. Corpus (`issues`) + metrics (`classifications`, `runs`). | `python db.py` (init) |
 | `ingest.py` | Fetch bounded upstream issues via `gh`, filter PRs, store + FTS index, write JSONL seed. | `--repo apache/superset --limit 300` |
-| `search.py` | FTS5 BM25 candidate retrieval over the corpus. | `--text "..." --k 5 [--json]` |
+| `search.py` | Candidate retrieval over the corpus (Postgres `ts_rank` or SQLite FTS5 BM25). | `--text "..." --k 5 [--json]` |
 | `record.py` | Persist classifications/runs; compute dashboard `metrics()` / `timeseries()`. | `classification|run|metrics|timeseries` |
 | `act.py` | Side-effecting GitHub actions (comment/label) + dup-comment renderer. `--dry-run` to preview. | `comment|label|dup-comment` |
 | `resolve_dependency.py` | Auto-resolve branch: OSV `scan` → `fix` (pin in base.in + minimal recompile) → `verify`. | `scan|fix|verify` |

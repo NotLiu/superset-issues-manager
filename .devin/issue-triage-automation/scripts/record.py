@@ -27,7 +27,7 @@ Usage (from the session):
 """
 
 # Standalone CLI tooling (not part of the superset package): stdlib json is
-# intended; the timeseries query interpolates only a fixed internal strftime
+# intended; the timeseries query interpolates only a fixed internal date
 # format string (no user input), so S608 is a false positive here.
 # ruff: noqa: TID251, S608
 from __future__ import annotations
@@ -35,7 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from db import connect, init_db
+from db import connect, init_db, is_postgres
 
 MINUTES_SAVED_PER_ISSUE = 5  # estimate, surfaced as such in the dashboard
 
@@ -54,11 +54,13 @@ def classification(
         cur = conn.execute(
             """INSERT INTO classifications
                (target_repo, issue_number, label, confidence, evidence, matched)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?)
+               RETURNING id""",
             (repo, issue, label, confidence, evidence, json.dumps(matched or [])),
         )
+        new_id = int(cur.fetchone()["id"])
         conn.commit()
-        return cur.lastrowid or 0
+        return new_id
     finally:
         conn.close()
 
@@ -80,11 +82,13 @@ def run(
             """INSERT INTO runs
                (target_repo, issue_number, label, action, outcome,
                 devin_session_id, acu_cost, pr_url)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               RETURNING id""",
             (repo, issue, label, action, outcome, devin_session_id, acu_cost, pr_url),
         )
+        new_id = int(cur.fetchone()["id"])
         conn.commit()
-        return cur.lastrowid or 0
+        return new_id
     finally:
         conn.close()
 
@@ -94,8 +98,8 @@ def metrics() -> dict[str, object]:
     conn = connect()
     try:
         total_tracked = conn.execute(
-            "SELECT COUNT(DISTINCT issue_number) FROM classifications"
-        ).fetchone()[0]
+            "SELECT COUNT(DISTINCT issue_number) AS n FROM classifications"
+        ).fetchone()["n"]
         by_label = {
             r["label"]: r["n"]
             for r in conn.execute(
@@ -109,11 +113,11 @@ def metrics() -> dict[str, object]:
             )
         }
         acu_total = conn.execute(
-            "SELECT COALESCE(SUM(acu_cost), 0) FROM runs"
-        ).fetchone()[0]
+            "SELECT COALESCE(SUM(acu_cost), 0) AS s FROM runs"
+        ).fetchone()["s"]
         runs_with_acu = conn.execute(
-            "SELECT COUNT(*) FROM runs WHERE acu_cost IS NOT NULL"
-        ).fetchone()[0]
+            "SELECT COUNT(*) AS n FROM runs WHERE acu_cost IS NOT NULL"
+        ).fetchone()["n"]
     finally:
         conn.close()
 
@@ -135,16 +139,23 @@ def metrics() -> dict[str, object]:
 
 def timeseries(bucket: str = "day") -> list[dict[str, object]]:
     """Counts of classifications per time bucket (day or week)."""
-    fmt = "%Y-%W" if bucket == "week" else "%Y-%m-%d"
+    if is_postgres():
+        fmt = "IYYY-IW" if bucket == "week" else "YYYY-MM-DD"
+        sql = f"""SELECT to_char(created_at, '{fmt}') AS bucket,
+                         label, COUNT(*) AS n
+                  FROM classifications
+                  GROUP BY bucket, label
+                  ORDER BY bucket"""
+    else:
+        fmt = "%Y-%W" if bucket == "week" else "%Y-%m-%d"
+        sql = f"""SELECT strftime('{fmt}', created_at) AS bucket,
+                         label, COUNT(*) AS n
+                  FROM classifications
+                  GROUP BY bucket, label
+                  ORDER BY bucket"""
     conn = connect()
     try:
-        rows = conn.execute(
-            f"""SELECT strftime('{fmt}', created_at) AS bucket,
-                       label, COUNT(*) AS n
-                FROM classifications
-                GROUP BY bucket, label
-                ORDER BY bucket""",
-        ).fetchall()
+        rows = conn.execute(sql).fetchall()
     finally:
         conn.close()
     return [dict(r) for r in rows]

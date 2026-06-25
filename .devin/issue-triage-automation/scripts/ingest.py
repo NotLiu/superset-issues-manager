@@ -36,7 +36,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from db import connect, DATA_DIR, init_db
+from db import connect, DATA_DIR, init_db, is_postgres
 
 
 def fetch_issues(repo: str, limit: int) -> list[dict[str, Any]]:
@@ -80,6 +80,25 @@ def fetch_issues(repo: str, limit: int) -> list[dict[str, Any]]:
     return issues
 
 
+def fetch_issue(repo: str, number: int) -> dict[str, Any]:
+    """Fetch a single issue by number via the gh API."""
+    out = subprocess.run(
+        ["gh", "api", f"/repos/{repo}/issues/{number}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    result: dict[str, Any] = json.loads(out.stdout)
+    return result
+
+
+def add_issue(repo: str, number: int) -> dict[str, Any]:
+    """Append a single (new) issue to the shared corpus for future dedup."""
+    row = normalize(repo, fetch_issue(repo, number))
+    store([row])
+    return row
+
+
 def normalize(repo: str, it: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_repo": repo,
@@ -94,28 +113,68 @@ def normalize(repo: str, it: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _store_postgres(conn: Any, rows: list[dict[str, Any]]) -> None:
+    for r in rows:
+        conn.execute(
+            """INSERT INTO issues
+               (source_repo, number, title, body, state, labels, html_url,
+                created_at, closed_at, search_tsv)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       to_tsvector('english', ? || ' ' || ?))
+               ON CONFLICT (source_repo, number) DO UPDATE SET
+                   title = EXCLUDED.title,
+                   body = EXCLUDED.body,
+                   state = EXCLUDED.state,
+                   labels = EXCLUDED.labels,
+                   html_url = EXCLUDED.html_url,
+                   created_at = EXCLUDED.created_at,
+                   closed_at = EXCLUDED.closed_at,
+                   search_tsv = EXCLUDED.search_tsv""",
+            (
+                r["source_repo"],
+                r["number"],
+                r["title"],
+                r["body"],
+                r["state"],
+                r["labels"],
+                r["html_url"],
+                r["created_at"],
+                r["closed_at"],
+                r["title"],
+                r["body"],
+            ),
+        )
+
+
+def _store_sqlite(conn: Any, rows: list[dict[str, Any]]) -> None:
+    for r in rows:
+        conn.execute(
+            """INSERT OR REPLACE INTO issues
+               (source_repo, number, title, body, state, labels, html_url,
+                created_at, closed_at)
+               VALUES (:source_repo, :number, :title, :body, :state, :labels,
+                       :html_url, :created_at, :closed_at)""",
+            r,
+        )
+        conn.execute(
+            "DELETE FROM issues_fts WHERE source_repo = ? AND number = ?",
+            (r["source_repo"], r["number"]),
+        )
+        conn.execute(
+            """INSERT INTO issues_fts (title, body, source_repo, number)
+               VALUES (?, ?, ?, ?)""",
+            (r["title"], r["body"], r["source_repo"], r["number"]),
+        )
+
+
 def store(rows: list[dict[str, Any]]) -> None:
     init_db()
     conn = connect()
     try:
-        for r in rows:
-            conn.execute(
-                """INSERT OR REPLACE INTO issues
-                   (source_repo, number, title, body, state, labels, html_url,
-                    created_at, closed_at)
-                   VALUES (:source_repo, :number, :title, :body, :state, :labels,
-                           :html_url, :created_at, :closed_at)""",
-                r,
-            )
-            conn.execute(
-                "DELETE FROM issues_fts WHERE source_repo = ? AND number = ?",
-                (r["source_repo"], r["number"]),
-            )
-            conn.execute(
-                """INSERT INTO issues_fts (title, body, source_repo, number)
-                   VALUES (?, ?, ?, ?)""",
-                (r["title"], r["body"], r["source_repo"], r["number"]),
-            )
+        if is_postgres():
+            _store_postgres(conn, rows)
+        else:
+            _store_sqlite(conn, rows)
         conn.commit()
     finally:
         conn.close()
@@ -147,11 +206,22 @@ def main() -> None:
         metavar="PATH",
         help="rebuild the corpus from a JSONL seed instead of calling GitHub",
     )
+    ap.add_argument(
+        "--add-issue",
+        type=int,
+        metavar="N",
+        help="append a single issue (by number) from --repo to the corpus",
+    )
     args = ap.parse_args()
 
     if args.from_seed:
         n = load_seed(Path(args.from_seed))
         print(f"Loaded {n} issues into the corpus from {args.from_seed}")
+        return
+
+    if args.add_issue:
+        row = add_issue(args.repo, args.add_issue)
+        print(f"Appended issue #{row['number']} to the corpus: {row['title']}")
         return
 
     print(f"Fetching up to {args.limit} issues from {args.repo} ...")
