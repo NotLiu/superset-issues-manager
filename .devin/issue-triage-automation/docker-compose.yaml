@@ -1,0 +1,77 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# docker-compose.yaml — Issue Triage & Auto-Resolve Automation
+#
+# Runs the full system flow locally:
+#   - postgres: shared datastore (corpus + metrics)
+#   - triage:   CLI/service container for running the triage pipeline
+#   - dashboard: metrics dashboard web UI
+#
+# Usage:
+#   docker compose up -d postgres       # start the datastore
+#   docker compose up dashboard         # start the dashboard (http://localhost:8765)
+#   docker compose run triage python ingest.py --from-seed ../data/corpus__apache__superset.jsonl
+#   docker compose run triage python triage.py --text "ChunkLoadError loading lazy bundle" --dry-run
+#
+# To connect to the hosted Neon Postgres instead of the local one, set
+# TRIAGE_DATABASE_URL in your shell or in a .env file alongside this file.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: triage
+      POSTGRES_USER: triage
+      POSTGRES_PASSWORD: triage_local
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  triage:
+    build: .
+    environment:
+      TRIAGE_DATABASE_URL: ${TRIAGE_DATABASE_URL:-postgresql://triage:triage_local@postgres:5432/triage}
+      GH_TOKEN: ${GH_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    entrypoint: ["python"]
+    command: ["db.py"]
+    profiles:
+      - cli
+
+  dashboard:
+    build: .
+    environment:
+      TRIAGE_DATABASE_URL: ${TRIAGE_DATABASE_URL:-postgresql://triage:triage_local@postgres:5432/triage}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8765:8765"
+    command: ["python", "dashboard.py", "--host", "0.0.0.0", "--port", "8765"]
+
+volumes:
+  pgdata:
