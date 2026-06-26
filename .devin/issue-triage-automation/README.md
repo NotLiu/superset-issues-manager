@@ -60,7 +60,8 @@ datastore and surfaced on a lightweight metrics dashboard.
 ```bash
 cd .devin/issue-triage-automation
 docker compose up -d postgres
-docker compose run triage python ingest.py --from-seed ../data/corpus__apache__superset.jsonl
+docker compose --profile cli run --rm triage db.py
+docker compose --profile cli run --rm triage ingest.py --from-seed ../data/corpus__apache__superset.jsonl
 docker compose up dashboard
 ```
 
@@ -70,11 +71,11 @@ The dashboard is available at **http://localhost:8765**.
 
 ```bash
 # Classify by raw text (no GitHub writes)
-docker compose run triage python triage.py \
+docker compose --profile cli run --rm triage triage.py \
   --text "ChunkLoadError loading lazy frontend bundle" --dry-run
 
 # Classify a real issue number (requires GH_TOKEN)
-docker compose run triage python triage.py \
+docker compose --profile cli run --rm triage triage.py \
   --issue 12 --repo NotLiu/superset-issues-manager --dry-run --json
 ```
 

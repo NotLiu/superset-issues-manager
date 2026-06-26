@@ -24,8 +24,8 @@
 # Usage:
 #   docker compose up -d postgres       # start the datastore
 #   docker compose up dashboard         # start the dashboard (http://localhost:8765)
-#   docker compose run triage python ingest.py --from-seed ../data/corpus__apache__superset.jsonl
-#   docker compose run triage python triage.py --text "ChunkLoadError loading lazy bundle" --dry-run
+#   docker compose --profile cli run --rm triage ingest.py --from-seed ../data/corpus__apache__superset.jsonl
+#   docker compose --profile cli run --rm triage triage.py --text "ChunkLoadError loading lazy bundle" --dry-run
 #
 # To connect to the hosted Neon Postgres instead of the local one, set
 # TRIAGE_DATABASE_URL in your shell or in a .env file alongside this file.
