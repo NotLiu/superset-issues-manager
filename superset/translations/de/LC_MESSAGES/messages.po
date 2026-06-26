@@ -7870,16 +7870,16 @@ msgid "List"
 msgstr "Auflisten"
 
 msgid "List Groups"
-msgstr "Gruppen"
+msgstr "Gruppen auflisten"
 
 msgid "List Roles"
-msgstr "Rollen"
+msgstr "Rollen auflisten"
 
 msgid "List Unique Values"
 msgstr "Eindeutige Werte auflisten"
 
 msgid "List Users"
-msgstr "Benutzer*innen"
+msgstr "Benutzer auflisten"
 
 msgid "List of extra columns made available in JavaScript functions"
 msgstr ""
@@ -13697,7 +13697,7 @@ msgid "Theme not found."
 msgstr "Design nicht gefunden."
 
 msgid "Themes"
-msgstr "Designs"
+msgstr "Themes"
 
 msgid "Themes could not be deleted."
 msgstr "Designs konnten nicht gelöscht werden."
